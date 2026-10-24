@@ -1,0 +1,147 @@
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const script = path.join(root, "python", "inspect_pkl.py");
+const python = findPython();
+
+if (!python) {
+  console.error("找不到 Python，无法验证 pickle 解析。");
+  process.exit(1);
+}
+
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pkl-preview-test-"));
+const sample = path.join(dir, "sample.pkl");
+const cycle = path.join(dir, "cycle.pkl");
+const missing = path.join(dir, "missing.pkl");
+let failed = 0;
+
+try {
+  const created = spawnSync(
+    python,
+    [
+      "-c",
+      `
+import pickle, math
+data = {
+  "name": "pkl-preview",
+  "text": "你好",
+  "nan": float("nan"),
+  "flags": [True, False, None],
+  "nums": list(range(20)),
+  "nested": {"a": (1, 2), "blob": b"\\x00\\x01pickle"},
+}
+try:
+    import numpy as np
+    matrix = np.arange(12, dtype="float32").reshape(3, 4)
+    matrix[0, 1] = np.nan
+    data["matrix"] = matrix
+except Exception:
+    data["matrix"] = [[1.0, float("nan")], [3.0, 4.0]]
+with open(r"""${sample}""", "wb") as handle:
+    pickle.dump(data, handle, protocol=4)
+items = []
+items.append(items)
+with open(r"""${cycle}""", "wb") as handle:
+    pickle.dump(items, handle, protocol=4)
+class Box:
+    def __init__(self):
+        self.x = [1, 2, 3]
+with open(r"""${missing}""", "wb") as handle:
+    pickle.dump(Box(), handle, protocol=4)
+`,
+    ],
+    { encoding: "utf8" }
+  );
+  assert(created.status === 0, created.stderr || created.stdout || "生成样例失败");
+
+  const collapsed = run(sample, ["--expand-arrays", "0", "--max-items", "10"]);
+  const nums = child(collapsed.root, "nums");
+  const nested = child(collapsed.root, "nested");
+  const matrix = child(collapsed.root, "matrix");
+  const text = child(collapsed.root, "text");
+  assert(collapsed.root.kind === "dict", "根节点应该是 dict");
+  assert(!nums.children, "关闭展开数组时，list 不应有子节点");
+  assert(nums.preview && nums.preview[0] === "0" && nums.length === 20, "折叠的 list 应保留前几项预览");
+  assert(nested.children && child(nested, "a"), "字典在折叠数组时仍然展开");
+  assert(!matrix.children, "关闭展开数组时，数组不应有子节点");
+  assert(child(collapsed.root, "nan").summary === "NaN", "应显示 NaN");
+  assert(text.summary.includes("你好"), "应保留中文");
+
+  const expanded = run(sample, ["--expand-arrays", "1", "--max-items", "10"]);
+  const expandedNums = child(expanded.root, "nums");
+  assert(expandedNums.children && expandedNums.children.length === 10, "展开数组时应按上限显示 10 项");
+  assert(expandedNums.truncated === true, "超过上限应标记截断");
+  assert(expandedNums.children[0].value.summary === "0", "展开后的第一项应是 0");
+  const expandedMatrix = child(expanded.root, "matrix");
+  assert(expandedMatrix.children && expandedMatrix.children.length >= 2, "展开后的矩阵应有行");
+
+  const cycled = run(cycle, ["--expand-arrays", "1", "--max-items", "5"]);
+  assert(cycled.ok === true, "循环引用不应导致解析失败");
+  const stubbed = run(missing, ["--expand-arrays", "0"]);
+  assert(stubbed.ok === true, "缺失的类应降级为占位对象");
+  assert((stubbed.stubs || []).some((item) => item.includes("Box")), "应报告未能导入的类");
+
+  const broken = spawnSync(python, ["-W", "ignore", script, path.join(dir, "nope.pkl")], { encoding: "utf8" });
+  const brokenPayload = JSON.parse(broken.stdout);
+  assert(brokenPayload.ok === false, "缺失文件应返回 ok:false");
+
+  console.log("verify ok:", python);
+} catch (error) {
+  console.error(error instanceof Error ? error.message : error);
+  failed = 1;
+} finally {
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+process.exit(failed);
+
+function run(file, args) {
+  const result = spawnSync(python, ["-W", "ignore", script, file, ...args], {
+    encoding: "utf8",
+    env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
+  });
+  if (!result.stdout.trim()) {
+    throw new Error(result.stderr || "没有 JSON 输出");
+  }
+  const payload = JSON.parse(result.stdout);
+  if (!payload.ok) {
+    throw new Error(payload.error + (result.stderr ? "\n" + result.stderr : ""));
+  }
+  return payload;
+}
+
+function child(node, key) {
+  const found = (node.children || []).find((item) => item.key === key);
+  if (!found) {
+    throw new Error("找不到键 " + key);
+  }
+  return found.value;
+}
+
+function assert(condition, message) {
+  if (!condition) {
+    throw new Error(message);
+  }
+}
+
+function findPython() {
+  const candidates = [
+    process.env.PYTHON,
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Programs", "Python", "Python312", "python.exe"),
+    "py",
+    "python",
+    "python3",
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    const result = spawnSync(candidate, ["-c", "import sys; print(sys.executable)"], { encoding: "utf8", windowsHide: true });
+    const line = (result.stdout || "").trim().split(/\r?\n/).filter(Boolean).pop();
+    if (result.status === 0 && line && !/windowsapps/i.test(line)) {
+      return line;
+    }
+  }
+  return "";
+}

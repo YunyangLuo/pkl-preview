@@ -1,0 +1,134 @@
+{
+  "name": "pkl-preview",
+  "displayName": "PKL Preview",
+  "description": "在 Cursor / VS Code 里预览 Python pickle（.pkl）文件，并可选择是否展开数组。",
+  "version": "0.1.0",
+  "publisher": "local",
+  "author": "YunyangLuo",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YunyangLuo/pkl-preview.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "pkl",
+    "pickle",
+    "python",
+    "preview"
+  ],
+  "capabilities": {
+    "virtualWorkspaces": true,
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "读取 pickle 会反序列化并可能执行代码，受限工作区中不会打开文件。"
+    }
+  },
+  "activationEvents": [
+    "onCustomEditor:pklPreview.file",
+    "onCommand:pklPreview.open"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "pklPreview.file",
+        "displayName": "PKL Preview",
+        "selector": [
+          {
+            "filenamePattern": "*.pkl"
+          },
+          {
+            "filenamePattern": "*.pickle"
+          },
+          {
+            "filenamePattern": "*.pck"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "pklPreview.open",
+        "title": "用 PKL Preview 打开",
+        "category": "PKL"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "pklPreview.open",
+          "when": "resourceExtname =~ /\\.(pkl|pickle|pck)$/i",
+          "group": "navigation"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "pklPreview.open",
+          "when": "resourceExtname =~ /\\.(pkl|pickle|pck)$/i",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "PKL Preview",
+      "properties": {
+        "pklPreview.pythonPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "用来反序列化 pickle 的 Python。留空时依次尝试工作区解释器、`.venv`、`py -3` 和 `python`。需要能导入文件里用到的库（例如 numpy）。"
+        },
+        "pklPreview.expandArrays": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "是否展开 list、tuple、set、ndarray 和 tensor。关闭时只显示长度、形状和前几项预览。"
+        },
+        "pklPreview.maxItems": {
+          "type": "number",
+          "default": 50,
+          "minimum": 1,
+          "maximum": 5000,
+          "markdownDescription": "展开时每一层最多显示多少项。字典也同样受这个上限约束。"
+        },
+        "pklPreview.maxDepth": {
+          "type": "number",
+          "default": 12,
+          "minimum": 1,
+          "maximum": 40,
+          "markdownDescription": "最多展开多少层嵌套。"
+        },
+        "pklPreview.maxStringLength": {
+          "type": "number",
+          "default": 400,
+          "minimum": 20,
+          "maximum": 5000,
+          "markdownDescription": "字符串和 repr 的最大显示长度。"
+        },
+        "pklPreview.timeoutSeconds": {
+          "type": "number",
+          "default": 120,
+          "minimum": 5,
+          "maximum": 3600,
+          "markdownDescription": "解析单个文件的最长时间（秒）。"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -w -p .",
+    "test": "npm run compile && node scripts/verify.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.6.3"
+  }
+}
