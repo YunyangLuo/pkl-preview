@@ -82,7 +82,7 @@
   function showStubs(items, nodeLimitHit) {
     const lines = [];
     if (items.length) {
-      lines.push("这些类型没能导入，下面是占位结果。请换一个已经安装对应库的 Python（设置 pklPreview.pythonPath）：");
+      lines.push("这些类型没能在本机 Python 里导入，先按保存下来的字段显示。若其中还有数组依赖这些库，内容可能不完整：");
       lines.push(items.join("\n"));
     }
     if (nodeLimitHit) {

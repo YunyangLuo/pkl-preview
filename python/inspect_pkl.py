@@ -31,7 +31,9 @@ class Budget:
         return True
 
 
-class TolerantUnpickler(pickle.Unpickler):
+class TolerantUnpickler(pickle._Unpickler):
+    dispatch = pickle._Unpickler.dispatch.copy()
+
     def __init__(self, file, **kwargs) -> None:
         super().__init__(file, **kwargs)
         self.imports: set[str] = set()
@@ -49,22 +51,71 @@ class TolerantUnpickler(pickle.Unpickler):
     def persistent_load(self, pid):
         return {"__persistent__": safe_repr(pid, 200)}
 
+    def load_setitem(self):
+        value = self.stack.pop()
+        key = self.stack.pop()
+        assign_item(self.stack[-1], key, value)
+
+    dispatch[pickle.SETITEM[0]] = load_setitem
+
+    def load_setitems(self):
+        items = self.pop_mark()
+        target = self.stack[-1]
+        for index in range(0, len(items), 2):
+            assign_item(target, items[index], items[index + 1])
+
+    dispatch[pickle.SETITEMS[0]] = load_setitems
+
+
+def assign_item(target, key, value) -> None:
+    try:
+        target[key] = value
+    except Exception:
+        try:
+            bag = object.__getattribute__(target, "_pkl_preview_items")
+        except Exception:
+            bag = None
+        if not isinstance(bag, dict):
+            bag = {}
+            try:
+                object.__setattr__(target, "_pkl_preview_items", bag)
+            except Exception:
+                return
+        bag[key] = value
+
 
 def make_stub(module: str, name: str):
-    class Stub:
+    class Stub(dict):
         def __new__(cls, *args, **kwargs):
-            obj = object.__new__(cls)
-            obj._module = module
-            obj._name = name
-            obj._args = args
-            obj._kwargs = kwargs
+            obj = dict.__new__(cls)
+            object.__setattr__(obj, "_module", module)
+            object.__setattr__(obj, "_name", name)
+            object.__setattr__(obj, "_args", args)
+            object.__setattr__(obj, "_kwargs", kwargs)
+            object.__setattr__(obj, "_list_items", [])
             return obj
 
         def __init__(self, *args, **kwargs) -> None:
-            return None
+            if len(args) == 1 and isinstance(args[0], dict) and not kwargs:
+                self.update(args[0])
+            elif kwargs and not args:
+                self.update(kwargs)
 
         def __setstate__(self, state) -> None:
-            self._state = state
+            object.__setattr__(self, "_state", state)
+            if isinstance(state, dict):
+                self.update(state)
+            elif isinstance(state, tuple) and state and isinstance(state[0], dict):
+                self.update(state[0])
+
+        def append(self, item) -> None:
+            object.__getattribute__(self, "_list_items").append(item)
+
+        def extend(self, items) -> None:
+            object.__getattribute__(self, "_list_items").extend(items)
+
+        def add(self, item) -> None:
+            object.__getattribute__(self, "_list_items").append(item)
 
         def __call__(self, *args, **kwargs):
             return make_stub(module, name)(*args, **kwargs)
@@ -75,6 +126,7 @@ def make_stub(module: str, name: str):
     Stub.__name__ = name
     Stub.__module__ = module
     Stub.__qualname__ = name
+    Stub._pkl_preview_stub = True
     return Stub
 
 
@@ -136,7 +188,20 @@ class Inspector:
         if is_array(obj):
             return self.array_node(obj, depth)
         if isinstance(obj, dict):
-            return self.dict_node(obj, depth)
+            node = self.dict_node(obj, depth)
+            if type(obj) is not dict:
+                saved = node["summary"]
+                node["kind"] = "object"
+                node["summary"] = short_type(obj)
+                if node.get("truncated") and "已达最大深度" in saved:
+                    node["summary"] += " · 已达最大深度"
+            return node
+        extra = preview_items(obj)
+        if extra:
+            node = self.dict_node(extra, depth)
+            node["kind"] = "object"
+            node["summary"] = short_type(obj)
+            return node
         if isinstance(obj, (list, tuple, set, frozenset)):
             return self.sequence_node(obj, depth)
         return self.object_node(obj, depth)
@@ -372,6 +437,16 @@ def bytes_node(payload: bytes, max_string: int) -> dict:
     if text:
         node["preview"] = [text[:max_string]]
     return node
+
+
+def preview_items(obj) -> dict | None:
+    try:
+        bag = object.__getattribute__(obj, "_pkl_preview_items")
+    except Exception:
+        return None
+    if isinstance(bag, dict) and bag:
+        return bag
+    return None
 
 
 def is_simple(obj) -> bool:

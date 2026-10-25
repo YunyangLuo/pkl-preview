@@ -17,6 +17,7 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pkl-preview-test-"));
 const sample = path.join(dir, "sample.pkl");
 const cycle = path.join(dir, "cycle.pkl");
 const missing = path.join(dir, "missing.pkl");
+const optimize = path.join(dir, "optimize.pkl");
 let failed = 0;
 
 try {
@@ -55,6 +56,20 @@ class Box:
         self.x = [1, 2, 3]
 with open(r"""${missing}""", "wb") as handle:
     pickle.dump(Box(), handle, protocol=4)
+class OptimizeResult(dict):
+    def __getattr__(self, name):
+        try:
+            return self[name]
+        except KeyError as exc:
+            raise AttributeError(name) from exc
+    __setattr__ = dict.__setitem__
+result = OptimizeResult()
+result["x"] = [0.1, 0.2, 0.3]
+result["success"] = True
+result["fun"] = 0.25
+result["message"] = "ok"
+with open(r"""${optimize}""", "wb") as handle:
+    pickle.dump(result, handle, protocol=4)
 `,
     ],
     { encoding: "utf8" }
@@ -87,6 +102,13 @@ with open(r"""${missing}""", "wb") as handle:
   const stubbed = run(missing, ["--expand-arrays", "0"]);
   assert(stubbed.ok === true, "缺失的类应降级为占位对象");
   assert((stubbed.stubs || []).some((item) => item.includes("Box")), "应报告未能导入的类");
+  const optimized = run(optimize, ["--expand-arrays", "0"]);
+  assert((optimized.stubs || []).some((item) => item.includes("OptimizeResult")), "应报告未能导入 OptimizeResult");
+  assert(child(optimized.root, "success").summary === "true", "应读出 OptimizeResult.success");
+  assert(child(optimized.root, "fun").summary === "0.25", "应读出 OptimizeResult.fun");
+  const solution = child(optimized.root, "x");
+  assert(solution.kind === "list" && !solution.children, "OptimizeResult 里的数组在关闭展开时保持折叠");
+  assert((solution.preview || []).includes("0.1"), "应预览 OptimizeResult.x");
 
   const broken = spawnSync(python, ["-W", "ignore", script, path.join(dir, "nope.pkl")], { encoding: "utf8" });
   const brokenPayload = JSON.parse(broken.stdout);
