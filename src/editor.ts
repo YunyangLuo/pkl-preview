@@ -1,10 +1,9 @@
 import type { ChildProcess } from "child_process";
-import { promises as fs } from "fs";
-import os from "os";
 import path from "path";
 import * as vscode from "vscode";
 import { previewHtml } from "./html";
 import { CancelledError, inspectPickle } from "./python";
+import { formatSize, modeLabel, openPickleFile } from "./remoteFile";
 
 interface PreviewSettings {
   pythonPath: string;
@@ -80,23 +79,18 @@ export class PklPreviewEditorProvider implements vscode.CustomReadonlyEditorProv
         return;
       }
       const started = Date.now();
-      let tempDir: string | undefined;
       try {
-        const bytes = await vscode.workspace.fs.readFile(document.uri);
+        const opened = await openPickleFile(document.uri, path.join(this.context.globalStorageUri.fsPath, "cache"));
         if (id !== loadId || disposed) {
           return;
         }
-        if (bytes.byteLength > 1536 * 1024 * 1024) {
-          throw new Error(`文件有 ${formatSize(bytes.byteLength)}，超过 1.5 GB，已停止预览。`);
-        }
-        tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pkl-preview-"));
-        const tempFile = path.join(tempDir, "input.pkl");
-        await fs.writeFile(tempFile, bytes);
-        this.log.appendLine(`解析 ${document.uri.toString()}（${formatSize(bytes.byteLength)}，展开数组=${settings.expandArrays}）`);
+        this.log.appendLine(
+          `解析 ${document.uri.toString()}（${formatSize(opened.bytes)}，${modeLabel(opened.mode)}，展开数组=${settings.expandArrays}）`
+        );
         const result = await inspectPickle(
           {
             extensionPath: this.context.extensionPath,
-            filePath: tempFile,
+            filePath: opened.filePath,
             pythonPath: settings.pythonPath,
             interpreterPath: settings.interpreterPath,
             workspaceFolders: vscode.workspace.workspaceFolders,
@@ -126,7 +120,8 @@ export class PklPreviewEditorProvider implements vscode.CustomReadonlyEditorProv
         webview.postMessage({
           type: "result",
           fileName: baseName(document.uri),
-          fileBytes: bytes.byteLength,
+          fileBytes: opened.bytes,
+          modeLabel: modeLabel(opened.mode),
           expandArrays: settings.expandArrays,
           maxItems: settings.maxItems,
           elapsedMs: Math.max(result.elapsedMs, Date.now() - started),
@@ -145,10 +140,6 @@ export class PklPreviewEditorProvider implements vscode.CustomReadonlyEditorProv
         const message = error instanceof Error ? error.message : String(error);
         this.log.appendLine(message);
         webview.postMessage({ type: "error", message });
-      } finally {
-        if (tempDir) {
-          await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
-        }
       }
     };
 
@@ -174,10 +165,11 @@ export class PklPreviewEditorProvider implements vscode.CustomReadonlyEditorProv
         }
       })
     );
-    if (document.uri.scheme === "file") {
-      const watcher = vscode.workspace.createFileSystemWatcher(
-        new vscode.RelativePattern(vscode.Uri.file(path.dirname(document.uri.fsPath)), path.basename(document.uri.fsPath))
-      );
+    const slash = document.uri.path.lastIndexOf("/");
+    const parent = document.uri.with({ path: slash > 0 ? document.uri.path.slice(0, slash) : "/" });
+    const fileName = slash >= 0 ? document.uri.path.slice(slash + 1) : document.uri.path;
+    if (fileName) {
+      const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(parent, fileName));
       const schedule = () => {
         if (timer) {
           clearTimeout(timer);
@@ -243,17 +235,4 @@ function clamp(value: number, min: number, max: number): number {
 function baseName(uri: vscode.Uri): string {
   const parts = uri.path.split("/");
   return parts[parts.length - 1] || uri.fsPath;
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`;
-  }
-  if (bytes < 1024 * 1024 * 1024) {
-    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  }
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }

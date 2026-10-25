@@ -137,7 +137,7 @@ export async function resolvePython(
   const seen = new Set<string>();
   for (const candidate of candidates) {
     const key = `${candidate.command}\n${candidate.args.join(" ")}`;
-    if (seen.has(key)) {
+    if (seen.has(key) || isRemotePath(candidate.command)) {
       continue;
     }
     seen.add(key);
@@ -147,8 +147,15 @@ export async function resolvePython(
     }
   }
   throw new Error(
-    "找不到可用的 Python。PKL Preview 需要本机 Python 3.8+ 来读取 pickle。Windows 商店的 python.exe 占位程序不能用。请安装 Python，或在设置 pklPreview.pythonPath 里填写 python.exe 的完整路径。"
+    "找不到可用的本机 Python。PKL Preview 只在本机运行，远程文件也会用本机 Python 解析，不会使用服务器上的解释器。请安装 Python 3.8 或更高版本，或在设置 pklPreview.pythonPath 里填写本机 python.exe 的完整路径。Windows 商店的 python.exe 占位程序不能用。"
   );
+}
+
+function isRemotePath(command: string): boolean {
+  if (process.platform !== "win32") {
+    return false;
+  }
+  return command.startsWith("/") && !command.startsWith("//");
 }
 
 async function addExecutableOrDirectory(

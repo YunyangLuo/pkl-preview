@@ -1,8 +1,8 @@
 {
   "name": "pkl-preview",
   "displayName": "PKL Preview",
-  "description": "在 Cursor / VS Code 里预览 Python pickle（.pkl）文件，并可选择是否展开数组。",
-  "version": "0.1.0",
+  "description": "在本机预览 Python pickle（.pkl）文件，并可选择是否展开数组。Remote SSH 时只需装在本机，不必在服务器安装。",
+  "version": "0.1.1",
   "publisher": "local",
   "author": "YunyangLuo",
   "license": "MIT",
@@ -22,6 +22,9 @@
     "pickle",
     "python",
     "preview"
+  ],
+  "extensionKind": [
+    "ui"
   ],
   "capabilities": {
     "virtualWorkspaces": true,
@@ -83,7 +86,7 @@
         "pklPreview.pythonPath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "用来反序列化 pickle 的 Python。留空时依次尝试工作区解释器、`.venv`、`py -3` 和 `python`。需要能导入文件里用到的库（例如 numpy）。"
+          "markdownDescription": "本机用来反序列化 pickle 的 Python。扩展只在本机运行，不会使用服务器上的解释器。留空时依次尝试本机工作区 `.venv`、`py -3` 和 `python`。这个 Python 需要能导入文件里用到的库（例如 numpy）。"
         },
         "pklPreview.expandArrays": {
           "type": "boolean",

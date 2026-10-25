@@ -58,7 +58,7 @@
         maxItemsInput.value = String(message.maxItems);
       }
       fileName.textContent = message.fileName || fileName.textContent;
-      const bits = [formatSize(message.fileBytes), message.format || "pickle", message.objectCount + " 个对象", message.decodeMs + " ms"];
+      const bits = [formatSize(message.fileBytes), message.modeLabel, message.format || "pickle", message.objectCount + " 个对象", message.decodeMs + " ms"].filter(Boolean);
       meta.textContent = bits.join(" · ");
       meta.title = message.pythonPath || "";
       showStubs(message.stubs || [], Boolean(message.nodeLimitHit));

@@ -20,6 +20,9 @@ const missing = path.join(dir, "missing.pkl");
 let failed = 0;
 
 try {
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+  assert(Array.isArray(pkg.extensionKind) && pkg.extensionKind.includes("ui"), "扩展应声明为只在本机运行");
+
   const created = spawnSync(
     python,
     [
