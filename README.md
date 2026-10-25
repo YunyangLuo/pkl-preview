@@ -18,7 +18,7 @@ cd $env:USERPROFILE\Documents\Cursor\cursor-plugin\pkl-preview
 npm install
 npm run compile
 npx @vscode/vsce package
-cursor --install-extension pkl-preview-0.1.2.vsix
+cursor --install-extension pkl-preview-0.1.3.vsix
 ```
 
 安装后执行 **Developer: Reload Window**。打开任意 `.pkl` 文件，或在资源管理器里右键选择 **用 PKL Preview 打开**。仓库里的 `samples/demo.pkl` 是一个小样例，里面有 list 和 ndarray。

@@ -13,6 +13,7 @@ import pickle
 import sys
 import time
 import traceback
+import types
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -65,6 +66,124 @@ class TolerantUnpickler(pickle._Unpickler):
             assign_item(target, items[index], items[index + 1])
 
     dispatch[pickle.SETITEMS[0]] = load_setitems
+
+    def load_build(self):
+        state = self.stack.pop()
+        inst = self.stack[-1]
+        setstate = getattr(inst, "__setstate__", None)
+        if setstate is None:
+            build_without_setstate(inst, state)
+            return
+        if not restore_state(setstate, state):
+            apply_state(inst, state)
+
+    dispatch[pickle.BUILD[0]] = load_build
+
+    def load_reduce(self):
+        args = self.stack.pop()
+        func = self.stack[-1]
+        try:
+            self.stack[-1] = func(*args)
+        except Exception as exc:
+            self.stack[-1] = failed_rebuild(func, args, exc)
+
+    dispatch[pickle.REDUCE[0]] = load_reduce
+
+
+def restore_state(setstate, state) -> bool:
+    try:
+        setstate(state)
+        return True
+    except KeyError as exc:
+        if not exc.args or exc.args[0] != "_xp":
+            return False
+    except Exception:
+        return False
+    try:
+        setstate(with_xp(state))
+        return True
+    except Exception:
+        return False
+
+
+def with_xp(state):
+    marker = numpy_marker()
+    if isinstance(state, dict):
+        copied = dict(state)
+        copied.setdefault("_xp", marker)
+        return copied
+    if isinstance(state, tuple) and len(state) == 2 and isinstance(state[0], dict):
+        return (with_xp(state[0]), state[1])
+    return state
+
+
+def numpy_marker():
+    try:
+        import numpy as np
+
+        return np.empty(0)
+    except Exception:
+        return _XpMarker()
+
+
+class _XpMarker:
+    def empty(self, *args, **kwargs):
+        return self
+
+
+def build_without_setstate(inst, state) -> None:
+    slotstate = None
+    if isinstance(state, tuple) and len(state) == 2:
+        state, slotstate = state
+    if state:
+        try:
+            inst_dict = inst.__dict__
+            for key, value in state.items():
+                inst_dict[sys.intern(key) if type(key) is str else key] = value
+        except Exception:
+            apply_state(inst, state)
+            return
+    if slotstate:
+        for key, value in slotstate.items():
+            try:
+                setattr(inst, key, value)
+            except Exception:
+                assign_item(inst, key, value)
+
+
+def apply_state(inst, state) -> None:
+    slotstate = None
+    if isinstance(state, tuple) and len(state) == 2 and isinstance(state[0], dict):
+        state, slotstate = state
+    if isinstance(state, dict):
+        for key, value in state.items():
+            if key == "_xp":
+                continue
+            try:
+                inst.__dict__[key] = value
+                continue
+            except Exception:
+                pass
+            try:
+                setattr(inst, key, value)
+            except Exception:
+                assign_item(inst, key, value)
+    if isinstance(slotstate, dict):
+        for key, value in slotstate.items():
+            try:
+                setattr(inst, key, value)
+            except Exception:
+                assign_item(inst, key, value)
+
+
+def failed_rebuild(func, args, exc):
+    module = str(getattr(func, "__module__", "") or "unknown")
+    name = str(getattr(func, "__name__", "") or "call")
+    obj = make_stub(module, name)()
+    obj["error"] = f"{type(exc).__name__}: {exc}"
+    if args:
+        obj["args"] = args[0] if len(args) == 1 else args
+    return obj
 
 
 def assign_item(target, key, value) -> None:
@@ -181,6 +300,13 @@ class Inspector:
             obj = obj.tobytes()
         if isinstance(obj, (bytes, bytearray)):
             return bytes_node(bytes(obj), self.max_string)
+        if isinstance(obj, types.ModuleType):
+            return {"kind": "module", "summary": getattr(obj, "__name__", "module")}
+        if isinstance(obj, (types.FunctionType, types.BuiltinFunctionType, types.MethodType, types.BuiltinMethodType)):
+            name = getattr(obj, "__qualname__", None) or getattr(obj, "__name__", "callable")
+            return {"kind": "callable", "summary": str(name)}
+        if isinstance(obj, type):
+            return {"kind": "type", "summary": f"{obj.__module__}.{obj.__name__}"}
         if is_dataframe(obj):
             return self.dataframe_node(obj)
         if is_series(obj):

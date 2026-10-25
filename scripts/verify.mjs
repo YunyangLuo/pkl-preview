@@ -18,6 +18,8 @@ const sample = path.join(dir, "sample.pkl");
 const cycle = path.join(dir, "cycle.pkl");
 const missing = path.join(dir, "missing.pkl");
 const optimize = path.join(dir, "optimize.pkl");
+const xpFile = path.join(dir, "xp.pkl");
+const linop = path.join(dir, "linop.pkl");
 let failed = 0;
 
 try {
@@ -70,6 +72,30 @@ result["fun"] = 0.25
 result["message"] = "ok"
 with open(r"""${optimize}""", "wb") as handle:
     pickle.dump(result, handle, protocol=4)
+import sys
+sys.path.insert(0, r"""${path.join(root, "python")}""")
+import sample_types
+xp = sample_types.NeedsXp()
+xp.shape = (3, 3)
+xp.note = "kept"
+with open(r"""${xpFile}""", "wb") as handle:
+    pickle.dump({"op": xp}, handle, protocol=4)
+try:
+    import numpy as np
+    from scipy.sparse.linalg._interface import LinearOperator
+    op = object.__new__(LinearOperator)
+    op.dtype = np.dtype("float64")
+    op.shape = (4, 4)
+    op.ndim = 2
+    original = LinearOperator.__getstate__
+    LinearOperator.__getstate__ = lambda self: {"dtype": self.dtype, "shape": self.shape, "ndim": self.ndim}
+    try:
+        with open(r"""${linop}""", "wb") as handle:
+            pickle.dump({"hess_inv": op}, handle, protocol=4)
+    finally:
+        LinearOperator.__getstate__ = original
+except Exception:
+    pass
 `,
     ],
     { encoding: "utf8" }
@@ -109,6 +135,17 @@ with open(r"""${optimize}""", "wb") as handle:
   const solution = child(optimized.root, "x");
   assert(solution.kind === "list" && !solution.children, "OptimizeResult 里的数组在关闭展开时保持折叠");
   assert((solution.preview || []).includes("0.1"), "应预览 OptimizeResult.x");
+  const restored = run(xpFile, ["--expand-arrays", "0"]);
+  const operator = child(restored.root, "op");
+  assert(child(operator, "note").summary.includes("kept"), "缺少 _xp 时仍应保留其他字段");
+  assert((child(operator, "shape").preview || []).includes("3"), "缺少 _xp 时仍应保留 shape");
+  if (fs.existsSync(linop)) {
+    const loaded = run(linop, ["--expand-arrays", "0"]);
+    const hess = child(loaded.root, "hess_inv");
+    const hessShape = child(hess, "shape");
+    const shown = [...(hessShape.preview || []), hessShape.summary || ""].join(" ");
+    assert(shown.includes("4"), "旧 LinearOperator 应保留 shape");
+  }
 
   const broken = spawnSync(python, ["-W", "ignore", script, path.join(dir, "nope.pkl")], { encoding: "utf8" });
   const brokenPayload = JSON.parse(broken.stdout);
